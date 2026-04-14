@@ -17,7 +17,24 @@ object ast:
     case TBool
     case TString
     case TUndefined
-    case TFunction(ts: List[Typ], tret: Typ)
+    case TFunction(ts: (PMode, Typ), tret: Typ)
+
+  /* Memory */
+  class Mem private (map: Map[Addr, Val], nextAddr: Int):
+    def apply(key: Addr): Val = map(key)
+    def get(key: Addr): Option[Val] = map.get(key)
+    def +(kv: (Addr, Val)): Mem = new Mem(map + kv, nextAddr)
+    def contains(key: Addr): Boolean = map.contains(key)
+    
+    def alloc(v: Val): (Mem, Addr) =
+      val fresha = Addr(nextAddr)
+      (new Mem(map + (fresha -> v), nextAddr + 1), fresha)
+    
+    override def toString: String = map.toString
+  
+  object Mem:
+    def empty = Mem(Map.empty, 1)
+
 
   /* JakartaScript Expressions */
   sealed abstract class Expr extends Positional:
@@ -32,7 +49,7 @@ object ast:
   end Expr
 
   /* Function Parameters */
-  type Params = List[(String, Typ)]
+  type Param = (String, (PMode, Typ))
 
   /* Literals and Values */
   sealed abstract class Val extends Expr
@@ -45,11 +62,14 @@ object ast:
 
   case object Undefined extends Val
 
+  case class Addr private[ast] (a: Int) extends Val
+
+
   /* Variables */
   case class Var(x: String) extends Expr
 
-  /* Declarations */
-  case class ConstDecl(x: String, ed: Expr, eb: Expr) extends Expr
+  /* Variable declarations */
+  case class Decl(mut: Mut, x: String, ed: Expr, eb: Expr) extends Expr
 
   /* Unary and Binary Operators */
   case class UnOp(op: Uop, e1: Expr) extends Expr
@@ -63,10 +83,10 @@ object ast:
   case class Print(e1: Expr) extends Expr
 
   /* Functions */
-  case class Function(p: Option[String], xs: Params, t: Option[Typ], e: Expr) extends Val
+  case class Function(p: Option[String], xs: Param, t: Option[Typ], e: Expr) extends Val
 
   /* Function Calls */
-  case class Call(e0: Expr, es: List[Expr]) extends Expr
+  case class Call(e0: Expr, es: Expr) extends Expr
 
   /* The above code is essentially equivalent to the following enum definitions given in the
    *  homework description, but behaves better with Scala's type inference.
@@ -86,12 +106,13 @@ object ast:
     case Bool(b: Boolean)
     case Str(s: String)
     case Undefined
+    case Addr private[ast] (a: Int)
 
     // Variables
     case Var(x: String)
 
-    // Constant declarations
-    case ConstDecl(x: String, ed: Expr, eb: Expr)
+    // Variable declarations
+    case Decl(mut: Mut, x: String, ed: Expr, eb: Expr)
 
     // Unary and binary operator expressions
     case UnOp(op: Uop, e1: Expr)
@@ -110,12 +131,20 @@ object ast:
     case Call(e0: Expr, es: List[Expr])
 
   // Values
-  type Val = Expr.Num | Expr.Bool | Expr.Str | Expr.Undefined.type | Expr.Function
+  type Val = Expr.Num | Expr.Bool | Expr.Str | Expr.Undefined.type | Expr.Function | Expr.Addr
   */
+
+  // Mutabilities
+  enum Mut:
+    case MConst, MLet
+
+  // Parameter Passing Modes
+  enum PMode:
+    case PConst, PName, PLet, PRef // <~ const, name, let, ref
 
   // Unary operators
   enum Uop:
-    case UMinus, Not // - !
+    case UMinus, Not, Deref // - ! *
 
   // Binary operators
   enum Bop:
@@ -123,6 +152,7 @@ object ast:
     case Eq, Ne, Lt, Le, Gt, Ge // === !== < <= > >=
     case And, Or // && ||
     case Seq // ,
+    case Assign // =
 
   /* Define values. */
   def isValue(e: Expr): Boolean = e match
@@ -133,7 +163,7 @@ object ast:
   def isStmt(e: Expr): Boolean =
     import Bop._
     e match
-      case Undefined | ConstDecl(_, _, _) |
+      case Undefined | Decl(_, _, _, _) |
            Print(_) => true
       case BinOp(Seq, _, e2) => isStmt(e2)
       case _ => false
@@ -142,14 +172,14 @@ object ast:
   def fv(e: Expr): Set[String] =
     e match
       case Var(x) => Set(x)
-      case ConstDecl(x, ed, eb) => fv(ed) | (fv(eb) - x)
-      case Num(_) | Bool(_) | Undefined | Str(_) => Set.empty
+      case Decl(_, x, ed, eb) => fv(ed) | (fv(eb) - x)
+      case Num(_) | Bool(_) | Undefined | Str(_) | Addr(_) => Set.empty
       case UnOp(_, e1) => fv(e1)
       case BinOp(_, e1, e2) => fv(e1) | fv(e2)
       case If(e1, e2, e3) => fv(e1) | fv(e2) | fv(e3)
       case Print(e1) => fv(e1)
-      case Call(e0, es) => fv(e0) | (es.toSet flatMap fv)
-      case Function(p, xs, _, e) => fv(e) -- p -- xs.map(_._1)
+      case Call(e0, e1) => fv(e0) | fv(e1)
+      case Function(p, x, _, e) => fv(e) -- p - x._1
 
   /* Check whether the given expression is closed. */
   def closed(e: Expr): Boolean = fv(e).isEmpty
@@ -166,6 +196,16 @@ object ast:
    */
   case class StaticTypeError(tbad: Typ, e: Expr) extends 
     JsException("Type Error: unexpected type: " + tbad.pretty, e.pos)
+
+  /*
+   * Location Expression Error exception.  Throw this exception 
+   * to signal a location expression error.
+   * 
+   *   throw LocExprError(e)
+   * 
+   */
+  case class LocTypeError(e: Expr) extends 
+    JsException("Type Error: expected location expression", e.pos)
 
   /*
   * Stuck Type Error exception.  Throw this exception to signal getting

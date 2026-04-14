@@ -6,7 +6,7 @@ import util.JsException
 import scala.util.matching.Regex
 import scala.util.parsing.combinator.JavaTokenParsers
 import scala.util.parsing.input.StreamReader
-import Bop._, Uop._, Typ._
+import Bop._, Uop._, Typ._, Mut._, PMode._
 
 object parse extends JavaTokenParsers:
   protected override val whiteSpace: Regex = """(\s|//.*|(?m)/\*(\*(?!/)|[^*])*\*/)+""".r
@@ -22,7 +22,7 @@ object parse extends JavaTokenParsers:
       val stmts = sts ++ lst
       if stmts == Nil then Undefined
       else stmts reduceRight {
-        case (ConstDecl(v, e1, _), st2) => ConstDecl(v, e1, st2)
+        case (Decl(mut, v, e1, _), st2) => Decl(mut, v, e1, st2)
         case (st1, st2) => BinOp(Seq, st1, st2)
       }
     }
@@ -40,18 +40,31 @@ object parse extends JavaTokenParsers:
       decl |
       expr
 
-  def decl: Parser[ConstDecl] =
+  def mutability: Parser[Mut] =
+    "const" ^^^ MConst |
+    "let" ^^^ MLet
+
+  def decl: Parser[Decl] =
     positioned(
-      ("const" ~> ident <~ "=") ~ expr ^^ { case s ~ e => ConstDecl(s, e, Num(0)) })
+      (mutability ~ ident <~ "=") ~ expr ^^ { case m ~ s ~ e => Decl(m, s, e, Num(0)) })
 
   def expr: Parser[Expr] = commaExpr
 
   def commaExpr: Parser[Expr] =
-    condExpr ~ rep("," ~> condExpr) ^^ { case e ~ es =>
+    assignExpr ~ rep("," ~> assignExpr) ^^ { case e ~ es =>
       (e :: es) reduceRight {
         case (e1, e2) => BinOp(Seq, e1, e2).setPos(e1.pos)
       }
     }
+
+  def assignExpr: Parser[Expr] =
+    rep(leftSideExpr <~ "=") ~ condExpr ^^
+    { case es~e => 
+        (es foldRight e) { case (l, e) => BinOp(Assign, l, e).setPos(l.pos) } 
+    } |
+    condExpr
+
+  def leftSideExpr: Parser[Expr] = simpleCallExpr
 
   def condExpr: Parser[Expr] =
     (orExpr <~ "?") ~ (orExpr <~ ":") ~ orExpr ^^ { case e1 ~ e2 ~ e3 => If(e1, e2, e3).setPos(e1.pos) } |
@@ -109,13 +122,13 @@ object parse extends JavaTokenParsers:
       simpleCallExpr
 
   def simpleCallExpr: Parser[Expr] =
-    positioned("console.log(" ~> condExpr <~ ")" ^^ Print.apply) |
+    positioned("console.log(" ~> assignExpr <~ ")" ^^ Print.apply) |
       positioned(functionExpr ~ rep(callArgs) ^^ { case e1 ~ args =>
         args.foldLeft(e1) { case (e1, e2) => Call(e1, e2).setPos(e1.pos) }
       })
 
   def callArgs: Parser[List[Expr]] =
-    "(" ~> rep(condExpr <~ ",") ~ opt(condExpr) <~ ")" ^^ { case es ~ eopt => es ++ eopt }
+    "(" ~> rep(assignExpr <~ ",") ~ opt(assignExpr) <~ ")" ^^ { case es ~ eopt => es ++ eopt }
 
   def functionExpr: Parser[Expr] =
     positioned("function" ~> opt(ident) ~ functionParams ~ opt(typAnn) ~ functionBody ^^
@@ -123,7 +136,7 @@ object parse extends JavaTokenParsers:
       positioned((functionParams <~ "=>") ~ expr ^^ { case params ~ e => Function(None, params, None, e) }) |
       primaryExpr
 
-  def functionParams: Parser[Params] =
+  def functionParams: Parser[Param] =
     "(" ~> params <~ ")"
 
   def functionBody: Parser[Expr] =
@@ -132,8 +145,8 @@ object parse extends JavaTokenParsers:
       if stmts == Nil then Undefined
       else stmts reduceRight {
         case (f@Function(Some(x), _, _, _), st2) =>
-          ConstDecl(x, f, st2)
-        case (ConstDecl(v, e1, _), st2) => ConstDecl(v, e1, st2)
+          Decl(MConst, x, f, st2)
+        case (Decl(m, v, e1, _), st2) => Decl(m, v, e1, st2)
         case (st1, st2) => BinOp(Seq, st1, st2)
       }
     })
@@ -177,10 +190,12 @@ object parse extends JavaTokenParsers:
     argTypList ~ ("=>" ~> typ) ^^
       { case txs~typ => TFunction(txs, typ) }
   
-  def argTypList: Parser[List[Typ]] =
-    baseTyp ^^ { t => List(t) } |
-    "(" ~> rep(typ <~ ",") ~ opt(typ) <~ ")" ^^
-    { case ts~topt => ts ++ topt }
+  def argTypList: Parser[List[(PMode, Typ)]] =
+    baseTyp ^^ { t => List((PConst, t)) } |
+    "(" ~> rep(opt(paramMode) ~ typ <~ ",") ~ opt(opt(paramMode) ~ typ) <~ ")" ^^
+    { case txs~txopt => txs ++ txopt map 
+      { case pmode~t => (pmode getOrElse PConst, t) } 
+    }
     
   def typAnn: Parser[Typ] =
     ":" ~> typ
@@ -192,9 +207,17 @@ object parse extends JavaTokenParsers:
     rep(typedIdent <~ sep) ~ opt(typedIdent) ^^
     { case txs~txopt => txs ++ txopt }
 
-  def params: Parser[Params] =
-    rep(typedIdent <~ ",") ~ opt(typedIdent) ^^
-    { case txs~txopt => txs ++ txopt } 
+  def paramMode: Parser[PMode] =
+    "let" ^^^ PLet |
+    "name" ^^^ PName |
+    "ref" ^^^ PRef |
+    "const" ^^^ PConst
+
+  def params: Parser[Param] =
+    rep(opt(paramMode) ~ typedIdent <~ ",") ~ opt(opt(paramMode) ~ typedIdent) ^^
+    { case txs~txopt => txs ++ txopt map 
+      { case pmode~tid => (tid._1, (pmode getOrElse PConst, tid._2)) } 
+    }
 
 
   /** utility functions */

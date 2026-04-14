@@ -2,7 +2,7 @@ package popl.js
 
 import org.bitbucket.inkytonik.kiama.output.PrettyPrinter
 import ast._
-import Bop._, Uop._, Typ._
+import Bop._, Uop._, Typ._, PMode._, Mut._
 
 object print extends PrettyPrinter:
   override val defaultIndent = 2
@@ -13,18 +13,16 @@ object print extends PrettyPrinter:
    * We do not override the toString method so that the abstract syntax can be printed
    * as is.
    */
-  def prettyVal(v: Expr): String = {
+  def prettyVal(v: Expr): String =
     require(isValue(v))
-    (v: @unchecked) match {
+    (v: @unchecked) match
       case Num(n) => n.toString
       case Bool(b) => b.toString
       case Str(s) => s
       case Undefined => "undefined"
+      case Addr(a) => s"@$a"
       case Function(p, _, _, _) =>
         "[Function%s]".format(p match { case None => "" case Some(s) => ": " + s })
-    }
-  }
-
 
   /*
    * Determine precedence level of top-level constructor in an expression
@@ -43,8 +41,9 @@ object print extends PrettyPrinter:
           case Eq | Ne => 7
           case And => 11
           case Or => 12
+          case Assign => 16
           case Seq => 17        
-      case If(_, _, _) | ConstDecl(_, _, _) => 15
+      case If(_, _, _) | Decl(_, _, _, _) => 15
     
 
   def showTyp(typ: Typ): Doc = 
@@ -54,13 +53,22 @@ object print extends PrettyPrinter:
       case TString => "String"
       case TUndefined => "Undefined"
       case TFunction(txs, tret) =>
-        parens(ssep(txs map showTyp, comma <> space)) <+> "=>" <+> showTyp(tret)
+        parens(ssep(txs, comma <> space)) <+> "=>" <+> showTyp(tret)
   
-  def showTIdList(txs: Params, sep: Doc = comma <> space): Doc = 
-    ssep(txs map showTId, sep)
+  def showPTyp(pt: (PMode, Typ)): Doc =
+    showPMode(pt._1) <+> showTyp(pt._2)
+  
+  def showTIdList(txs: Param, sep: Doc = comma <> space): Doc =
+    ssep(showTId txs, sep)
     
-  def showTId(tid: (String, Typ)): Doc =
-    tid._1 <> colon <+> showTyp(tid._2)
+  def showPMode(pm: PMode): Doc = pm match
+    case PConst => "const"
+    case PLet => "let"
+    case PName => "name"
+    case PRef => "ref"
+    
+  def showTId(tid: (String, (PMode, Typ))): Doc =
+    showPMode(tid._2._1) <+> tid._1 <> colon <+> showTyp(tid._2._2)
 
 
   /* Associativity of binary operators */
@@ -79,8 +87,11 @@ object print extends PrettyPrinter:
    * Pretty-print expressions in concrete JavaScript syntax.
    */
   def showJS(e: Expr): Doc =
-    def showDecl(x: String, e1: Expr): Doc =
-      "const" <+> x <+> "=" <+>
+    def showDecl(m: Mut, x: String, e1: Expr): Doc =
+      val mut = m match
+        case MConst => "const"
+        case MLet => "let"
+      mut <+> x <+> "=" <+>
         nest(showJS(e1)) <> semi <> line
 
     e match
@@ -88,11 +99,13 @@ object print extends PrettyPrinter:
       case Num(d) => value(d)
       case Bool(b) => b.toString()
       case Str(s) => "'" <> s <> "'"
+      case Addr(a) => s"@$a"
       case Var(x) => x
       case eu@UnOp(uop, e) =>
         val op: Doc = uop match
           case UMinus => "-"
           case Not => "!"
+          case Deref => "*"
         op <+> (if prec(e) < prec(eu) then showJS(e) else parens(showJS(e)))
       case BinOp(bop, e1, e2) =>
         val op: Doc = bop match
@@ -108,6 +121,7 @@ object print extends PrettyPrinter:
           case Le => " <= "
           case Gt => " > "
           case Ge => " >= "
+          case Assign => " = "
           case Seq =>
             if isStmt(e2) then ";" <> line else ", "
 
@@ -127,18 +141,18 @@ object print extends PrettyPrinter:
 
       case Print(e) =>
         "console.log" <> parens(showJS(e))
-      case ConstDecl(x, e1, e2) =>
-        showDecl(x, e1) <> line <> showJS(e2)
+      case Decl(m, x, e1, e2) =>
+        showDecl(m, x, e1) <> line <> showJS(e2)
       case Call(e1, List(e@BinOp(Seq, _, _) ) ) if isStmt(e) =>
         showJS(e1) <> parens(braces(line <> indent(showJS(e)) <> line))
       case Call(e1, es) =>
-        showJS(e1) <> parens(hsep(es map showJS, comma))
+        showJS(e1) <> parens(hsep(es, comma))
       case Function(p, xs, tann, e) =>
         def showReturn(e: Expr): Doc = e match
           case BinOp(Seq, e1, e2) =>
             line <> showJS(e1) <> semi <> showReturn(e2)
-          case ConstDecl(x, e1, e2) =>
-            line <> showDecl(x, e1) <> showReturn(e2)
+          case Decl(m, x, e1, e2) =>
+            line <> showDecl(m, x, e1) <> showReturn(e2)
           case Undefined => emptyDoc
           case e => line <> "return" <+> showJS(e)
 
@@ -146,7 +160,7 @@ object print extends PrettyPrinter:
         val params = showTIdList(xs)
         val rtyp = tann map (":" <+> showTyp(_)) getOrElse emptyDoc
         "function" <+> name <> 
-          params <> rtyp <+> braces(nest(showReturn(e)) <> line)
+          parens(params) <> rtyp <+> braces(nest(showReturn(e)) <> line)
 
   end showJS
 
