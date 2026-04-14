@@ -10,7 +10,7 @@ object hw08 extends js.util.JsApp:
    * Replace the '???' expression with your code in each function.
    *
    * Do not make other modifications to this template, such as
-   * - adding "extends App" or "extends Application" to your hw09 object,
+   * - adding "extends App" or "extends Application" to your hw08 object,
    * - adding a "main" method, and
    * - leaving any failing asserts.
    * 

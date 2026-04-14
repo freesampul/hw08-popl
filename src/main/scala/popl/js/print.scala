@@ -53,13 +53,13 @@ object print extends PrettyPrinter:
       case TString => "String"
       case TUndefined => "Undefined"
       case TFunction(txs, tret) =>
-        parens(ssep(txs, comma <> space)) <+> "=>" <+> showTyp(tret)
+        parens(showPTyp(txs)) <+> "=>" <+> showTyp(tret)
   
   def showPTyp(pt: (PMode, Typ)): Doc =
     showPMode(pt._1) <+> showTyp(pt._2)
   
   def showTIdList(txs: Param, sep: Doc = comma <> space): Doc =
-    ssep(showTId txs, sep)
+    showTId(txs)
     
   def showPMode(pm: PMode): Doc = pm match
     case PConst => "const"
@@ -143,10 +143,10 @@ object print extends PrettyPrinter:
         "console.log" <> parens(showJS(e))
       case Decl(m, x, e1, e2) =>
         showDecl(m, x, e1) <> line <> showJS(e2)
-      case Call(e1, List(e@BinOp(Seq, _, _) ) ) if isStmt(e) =>
-        showJS(e1) <> parens(braces(line <> indent(showJS(e)) <> line))
-      case Call(e1, es) =>
-        showJS(e1) <> parens(hsep(es, comma))
+      case Call(e0, e1@BinOp(Seq, _, _)) if isStmt(e1) =>
+        showJS(e0) <> parens(braces(line <> indent(showJS(e1)) <> line))
+      case Call(e0, e1) =>
+        showJS(e0) <> parens(showJS(e1))
       case Function(p, xs, tann, e) =>
         def showReturn(e: Expr): Doc = e match
           case BinOp(Seq, e1, e2) =>

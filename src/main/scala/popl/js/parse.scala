@@ -127,8 +127,8 @@ object parse extends JavaTokenParsers:
         args.foldLeft(e1) { case (e1, e2) => Call(e1, e2).setPos(e1.pos) }
       })
 
-  def callArgs: Parser[List[Expr]] =
-    "(" ~> rep(assignExpr <~ ",") ~ opt(assignExpr) <~ ")" ^^ { case es ~ eopt => es ++ eopt }
+  def callArgs: Parser[Expr] =
+    "(" ~> assignExpr <~ ")"
 
   def functionExpr: Parser[Expr] =
     positioned("function" ~> opt(ident) ~ functionParams ~ opt(typAnn) ~ functionBody ^^
@@ -185,18 +185,15 @@ object parse extends JavaTokenParsers:
     "String" ^^^ TString |
     "Num" ^^^ TNumber |
     "Undefined" ^^^ TUndefined
-        
+
+  def argTyp: Parser[(PMode, Typ)] =
+    baseTyp ^^ { t => (PConst, t) } |
+      "(" ~> opt(paramMode) ~ typ <~ ")" ^^ { case pmode ~ t => (pmode getOrElse PConst, t) }
+
   def functionTyp: Parser[TFunction] =
-    argTypList ~ ("=>" ~> typ) ^^
+    argTyp ~ ("=>" ~> typ) ^^
       { case txs~typ => TFunction(txs, typ) }
-  
-  def argTypList: Parser[List[(PMode, Typ)]] =
-    baseTyp ^^ { t => List((PConst, t)) } |
-    "(" ~> rep(opt(paramMode) ~ typ <~ ",") ~ opt(opt(paramMode) ~ typ) <~ ")" ^^
-    { case txs~txopt => txs ++ txopt map 
-      { case pmode~t => (pmode getOrElse PConst, t) } 
-    }
-    
+
   def typAnn: Parser[Typ] =
     ":" ~> typ
     
@@ -214,11 +211,8 @@ object parse extends JavaTokenParsers:
     "const" ^^^ PConst
 
   def params: Parser[Param] =
-    rep(opt(paramMode) ~ typedIdent <~ ",") ~ opt(opt(paramMode) ~ typedIdent) ^^
-    { case txs~txopt => txs ++ txopt map 
-      { case pmode~tid => (tid._1, (pmode getOrElse PConst, tid._2)) } 
-    }
-
+    opt(paramMode) ~ typedIdent ^^
+      { case pmode ~ tid => (tid._1, (pmode getOrElse PConst, tid._2)) }
 
   /** utility functions */
   private def getExpr(p: ParseResult[Expr]): Expr =

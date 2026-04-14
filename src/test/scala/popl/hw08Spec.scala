@@ -1,11 +1,11 @@
 package popl
 
-import hw09._
+import hw08._
 import org.scalatest.flatspec.AnyFlatSpec
 import js.ast._
 import Bop._, Uop._, Typ._, PMode._, Mut._
 
-class hw09Spec extends AnyFlatSpec:
+class hw08Spec extends AnyFlatSpec:
   // typeInfer
   
   "typeInfer" should "infer types of arithmetic expressions" in {
@@ -55,7 +55,7 @@ class hw09Spec extends AnyFlatSpec:
   
   "typeInfer" should "reject equalities involving functions" in {
     val x = "x"
-    val e1 = Function(None, List((x, (PConst, TNumber))), None, Var(x))
+    val e1 = Function(None, (x, (PConst, TNumber)), None, Var(x))
     val e2 = Num(2)
     intercept[StaticTypeError]{
       typeInfer(Map.empty, BinOp(Eq, e1, e2))
@@ -91,67 +91,57 @@ class hw09Spec extends AnyFlatSpec:
     val y = "y"
     val f = "f"
     val ebf = BinOp(Plus, Var(x), Num(3))
-    val f1 = Function(None, List((x, (PConst, TNumber))), None, ebf)
-    val tf = TFunction(List((PConst, TNumber)), TNumber)
+    val f1 = Function(None, (x, (PConst, TNumber)), None, ebf)
+    val tf = TFunction((PConst, TNumber), TNumber)
     assert(typeInfer(Map.empty, f1) === tf)
-    val f2 = Function(None, List((x, (PConst, TNumber))), Some(TNumber), ebf)
+    val f2 = Function(None, (x, (PConst, TNumber)), Some(TNumber), ebf)
     assert(typeInfer(Map.empty, f2) === tf)
-    val f3 = Function(Some(f), List((x, (PConst, TNumber))), Some(TNumber), ebf)
+    val f3 = Function(Some(f), (x, (PConst, TNumber)), Some(TNumber), ebf)
     assert(typeInfer(Map.empty, f3) === tf)
-    val fbad1 = Function(None, List((x, (PConst, TNumber))), Some(TBool), ebf)
+    val fbad1 = Function(None, (x, (PConst, TNumber)), Some(TBool), ebf)
     intercept[StaticTypeError]{
       // wrong return type annotation
       typeInfer(Map.empty, fbad1)
     }
-    val fbad2 = Function(None, List((x, (PConst, TBool))), None, ebf)
+    val fbad2 = Function(None, (x, (PConst, TBool)), None, ebf)
     intercept[StaticTypeError]{
       // wrong parameter type annotation
       typeInfer(Map.empty, fbad2)
     }
-    val fbad3 = Function(Some(f), List((x, (PConst, TNumber))), None, ebf)
+    val fbad3 = Function(Some(f), (x, (PConst, TNumber)), None, ebf)
     intercept[StaticTypeError]{
       // missing return type annotation for (potentially) recursive function
       typeInfer(Map.empty, fbad3)
     }
     val ebg = If(Var(y), Var(x), ebf)
-    val g = Function(None, List((x, (PConst, TNumber)), (y, (PConst, TBool))), None, ebg)
-    val tg = TFunction(List((PConst, TNumber), (PConst, TBool)), TNumber)
+    val g = Function(None, (x, (PConst, TNumber)), None, Function(None, (y, (PConst, TBool)), None, ebg))
+    val tg = TFunction((PConst, TNumber), TFunction((PConst, TBool), TNumber))
     assert(typeInfer(Map.empty, g) === tg)
   }
-  
+
   "typeInfer" should "infer types of Call expressions" in {
     val x = "x"
     val y = "y"
     val f = "f"
     val ebf = BinOp(Plus, Var(x), Num(3))
-    val f1 = Function(None, List((x, (PConst, TNumber))), None, ebf)
-    val e1 = Call(f1, List(Num(3)))
+    val f1 = Function(None, (x, (PConst, TNumber)), None, ebf)
+    val e1 = Call(f1, Num(3))
     assert(typeInfer(Map.empty, e1) === TNumber)
     val ebg = If(Var(y), Var(x), ebf)
-    val g = Function(None, List((x, (PConst, TNumber)), (y, (PConst, TBool))), None, ebg)
-    val e2 = Call(g, List(Num(3), Bool(true)))
+    val g = Function(None, (x, (PConst, TNumber)), None, Function(None, (y, (PConst, TBool)), None, ebg))
+    val e2 = Call(Call(g, Num(3)), Bool(true))
     assert(typeInfer(Map.empty, e1) === TNumber)
-    val ebf2 = Call(Var(f), List(Var(x)))
-    val f2 = Function(Some(f), List((x, (PConst, TNumber))), Some(TNumber), ebf2)
-    val e3 = Call(f2, List(Num(3)))
+    val ebf2 = Call(Var(f), Var(x))
+    val f2 = Function(Some(f), (x, (PConst, TNumber)), Some(TNumber), ebf2)
+    val e3 = Call(f2, Num(3))
     assert(typeInfer(Map.empty, e3) === TNumber)
-    val fbad1 = Call(f1, List(Num(3), Bool(false)))
-    intercept[StaticTypeError]{
-      // too many arguments in function call
-      typeInfer(Map.empty, fbad1)
-    }
-    val fbad2 = Call(g, List(Num(3)))
-    intercept[StaticTypeError]{
-      // too few arguments in function call
-      typeInfer(Map.empty, fbad2)
-    }
-    val fbad3 = Call(f1, List(Bool(true)))
+    val fbad3 = Call(f1, Bool(true))
     intercept[StaticTypeError]{
       // argument type mismatch
       typeInfer(Map.empty, fbad3)
     }
-  }  
-  
+  }
+
   "typInfer" should "reject programs that try to assign non-assignable expressions" in {
     intercept[LocTypeError] {
       inferType("const x = 3; x = x + 1")
@@ -186,18 +176,19 @@ class hw09Spec extends AnyFlatSpec:
     }
   }
   
-  "typInfer" should "infer types for different parameter passing modes" in {
-    val t1 = TFunction(List((PLet, TNumber)), TNumber)
+  "typeInfer" should "infer types for different parameter passing modes" in {
+    val t1 = TFunction((PLet, TNumber), TNumber)
     val e1 = "function(let x: Num) { x = x + 1; return x; }"
     assert(inferType(e1) === t1)
-    
-    val t2 = TFunction(List((PConst, TNumber), (PLet, TString)), TString)
-    val e2 = "function(const x: Num, let y: String) { return x === 3 ? y : y + '3'; }"
+
+    val t2 = TFunction((PConst, TNumber), TFunction((PLet, TString), TString))
+    val e2 = "function(const x: Num) { return function(let y: String) { return x === 3 ? y : y + '3'; }; }"
     assert(inferType(e2) === t2)
-    
-    val t3 = TFunction(List((PRef, TNumber), (PConst, TString)), t2)
-    val e3 = "function(ref x: Num, y: String) { return " + e2 + " }"
+
+    val t3 = TFunction((PRef, TNumber), TFunction((PConst, TString), t2))
+    val e3 = "function(ref x: Num) { return function(y: String) { return " + e2 + " }; }"
     assert(inferType(e3) === t3)
+
   }
   
   
@@ -407,30 +398,31 @@ class hw09Spec extends AnyFlatSpec:
   "Call" should "evaluate a function using big-step semantics" in {
     val f = "f"
     val x = "x"
-    val e1 = Function(None, List((x, (PConst, TNumber))), None, BinOp(Plus, Var(x), Num(1)))
+    val e1 = Function(None, (x, (PConst, TNumber)), None, BinOp(Plus, Var(x), Num(1)))
     val e2 = Num(2)
-    val e3 = evaluate(Call(e1, List(e2)))
+    val e3 = evaluate(Call(e1, e2))
     assert(e3 === Num(3))
   }
 
   "Call" should "handle recursive functions using big-step semantics" in {
     val f = "f"
     val x = "x"
-    val fbody = If(BinOp(Eq, Var(x), Num(0)), Var(x), BinOp(Plus, Var(x), Call(Var(f), List(BinOp(Minus, Var(x), Num(1))))))
-    val e1 = Function(Some(f), List((x, (PConst, TNumber))), Some(TNumber), fbody)
+    val fbody = If(BinOp(Eq, Var(x), Num(0)), Var(x), BinOp(Plus, Var(x), Call(Var(f), BinOp(Minus, Var(x), Num(1)))))
+    val e1 = Function(Some(f), (x, (PConst, TNumber)), Some(TNumber), fbody)
     val e2 = Num(3)
-    val e3 = evaluate(Call(e1, List(e2)))
+    val e3 = evaluate(Call(e1, e2))
     assert(e3 === Num(6))
   } 
   
   "Call" should "handle parameter passing modes" in {
-    val e1 = """
+    val e1 =
+      """
       let x = 1;
-      const f = function(name x: Num, y: Num) { return x + x + y; };
-      f(x = x + 1, 1)
+      const f = function(name x: Num) { return function(y: Num) { return x + x + y; }; };
+      f(x = x + 1)(1)
     """
     assert(evaluate(e1) === Num(6))
-    
+
     val e2 = """
       let x = 1;
       const f = function(let x: Num) { x = x + 1; return x; };
