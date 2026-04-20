@@ -84,7 +84,12 @@ object hw08 extends js.util.JsApp:
           case Seq =>
             typ(e1); typ(e2)
           case Assign =>
-            ???
+            e1 match
+              case Var(x) =>
+                env.get(x) match
+                  case Some((MLet, t)) => checkTyp(t, e2)
+                  case _ => locerr(e1)
+              case _ => locerr(e1)
       case If(e1, e2, e3) =>
         checkTyp(TBool, e1)
         val t2 = typ(e2)
@@ -99,7 +104,7 @@ object hw08 extends js.util.JsApp:
           case (None, _) => env
           case _ => err(TUndefined, e1)
         // Bind to env2 an environment that extends env1 with bindings for xs.
-        val env2 = ???
+        val env2 = env1 + (xs._1 -> (mut(xs._2._1), xs._2._2))
         // Match on whether the return type is specified.
         tann match
           case None => TFunction(xs._2, typeInfer(env2, e1))
@@ -109,7 +114,18 @@ object hw08 extends js.util.JsApp:
                 TFunction(xs._2, tret)
               case tbody => err(tbody, e1)
       case Call(e1, es) => typ(e1) match
-        case TFunction(txs, tret) => ???
+        case TFunction(txs, tret) =>
+          txs._1 match
+            case PRef =>
+              es match
+                case Var(x) =>
+                  env.get(x) match
+                    case Some((MLet, _)) => checkTyp(txs._2, es); tret
+                    case _ => locerr(es)
+                case _ => locerr(es)
+            case _ =>
+              checkTyp(txs._2, es)
+              tret
         case tgot => err(tgot, e1)
       case Addr(_) | UnOp(Deref, _) => 
         throw IllegalArgumentException("Gremlins: Encountered unexpected expression %s.".format(e))
@@ -204,43 +220,64 @@ object hw08 extends js.util.JsApp:
       
       // EvalNot
       case UnOp(Not, e1) =>
-        ???
+        val (mp, b) = eToBool(m, e1)
+        (mp, Bool(!b))
     
       // EvalDerefVar
       case UnOp(Deref, a: Addr) =>
-        ???
+        if m.contains(a) then (m, m(a)) else throw StuckError(e)
         
       // EvalPlusNum, EvalPlusStr
       case BinOp(Plus, e1, e2) => 
-        ???
+        val (m1, v1) = eval(m, e1)
+        val (m2, v2) = eval(m1, e2)
+        (v1, v2) match
+          case (Num(n1), Num(n2)) => (m2, Num(n1 + n2))
+          case (Str(s1), Str(s2)) => (m2, Str(s1 + s2))
+          case _ => throw StuckError(e)
       
       // EvalArith
       case BinOp(bop@(Minus|Times|Div), e1, e2) => 
-        ???
+        val (m1, n1) = eToNum(m, e1)
+        val (m2, n2) = eToNum(m1, e2)
+        (bop: @unchecked) match
+          case Minus => (m2, Num(n1 - n2))
+          case Times => (m2, Num(n1 * n2))
+          case Div => (m2, Num(n1 / n2))
       
       // EvalAndTrue, EvalAndFalse
       case BinOp(And, e1, e2) => 
-        ???
+        val (m1, b1) = eToBool(m, e1)
+        if b1 then eval(m1, e2) else (m1, Bool(false))
       
       // EvalOrTrue, EvalOrFalse
       case BinOp(Or, e1, e2) =>
-        ???
+        val (m1, b1) = eToBool(m, e1)
+        if b1 then (m1, Bool(true)) else eval(m1, e2)
       
       // EvalSeq
       case BinOp(Seq, e1, e2) => 
-        ???
+        val (m1, _) = eval(m, e1)
+        eval(m1, e2)
       
       // EvalAssignVar
       case BinOp(Assign, UnOp(Deref, a: Addr), e2) =>
-        ???
+        val (m2, v2) = eval(m, e2)
+        if m2.contains(a) then (m2 + (a -> v2), v2) else throw StuckError(e)
         
       // EvalEqual, EvalInequalNum, EvalInequalStr
       case BinOp(bop@(Eq|Ne|Lt|Gt|Le|Ge), e1, e2) =>
-        ???
+        val (m1, v1) = eval(m, e1)
+        val (m2, v2) = eval(m1, e2)
+        (bop: @unchecked) match
+          case Eq => (m2, Bool(v1 == v2))
+          case Ne => (m2, Bool(v1 != v2))
+          case Lt | Gt | Le | Ge => (m2, Bool(inequalityVal(bop, v1, v2)))
         
       // EvalIfThen, EvalIfElse
       case If(e1, e2, e3) => 
-        ???
+        val (m1, b1) = eToBool(m, e1)
+        if b1 then eval(m1, e2) else eval(m1, e3)
       
       // EvalConstDecl
       case Decl(MConst, x, ed, eb) => 
@@ -249,7 +286,9 @@ object hw08 extends js.util.JsApp:
       
       // EvalVarDecl
       case Decl(MLet, x, ed, eb) =>
-        ???
+        val (md, vd) = eval(m, ed)
+        val (mp, a) = md.alloc(vd)
+        eval(mp, subst(eb, x, UnOp(Deref, a)))
         
       // EvalCall*
       case Call(e0, es) =>
@@ -265,15 +304,26 @@ object hw08 extends js.util.JsApp:
             (mode, es) match
               // EvalCallConst
               case (PConst, e1) =>
-                ???
+                val (m1, v1) = eval(m0, e1)
+                eval(m1, subst(eb, x1, v1))
               
               // EvalCallName, EvalCallRef
               case (PName | PRef, e1) =>
-                ???
+                mode match
+                  case PName =>
+                    eval(m0, subst(eb, x1, e1))
+                  case PRef =>
+                    e1 match
+                      case UnOp(Deref, _: Addr) =>
+                        eval(m0, subst(eb, x1, e1))
+                      case _ => throw StuckError(e)
+                  case _ => throw StuckError(e)
                 
               // EvalCallVar
               case (PLet, e1) =>
-                ???
+                val (m1, v1) = eval(m0, e1)
+                val (m2, a) = m1.alloc(v1)
+                eval(m2, subst(eb, x1, UnOp(Deref, a)))
               case _ => throw StuckError(e)
 
           case _ => throw StuckError(e)
